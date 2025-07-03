@@ -9,5 +9,3 @@ function chunk(arr, size) {
   }
   return chunks;
 }
-
-module.exports = { unique, chunk };

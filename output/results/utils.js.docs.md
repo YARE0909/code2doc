@@ -8,11 +8,12 @@ function delay(ms) {
 function generateId() {
   return Math.random().toString(36).substr(2, 9);
 }
-
-module.exports = { delay, generateId };
-
 ```
 
 ## Generated Documentation
 
-/*  delay
+Delay a delay in ms.
+
+@public
+@param {number} ms The number of milliseconds to delay.
+@return {Promise} A promise that will be resolved after the delay.

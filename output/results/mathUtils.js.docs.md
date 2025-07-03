@@ -9,11 +9,12 @@ function factorial(n) {
   if (n <= 1) return 1;
   return n * factorial(n - 1);
 }
-
-module.exports = { add, factorial };
-
 ```
 
 ## Generated Documentation
 
-Adds a module to the module. @param a Array @param b Array @return Array
+Add two numbers.
+
+@param {number} a A number to add.
+@param {number} b A number to add.
+@return {number} A number.

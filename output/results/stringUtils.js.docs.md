@@ -11,11 +11,11 @@ function capitalize(str) {
 function reverse(str) {
   return str.split('').reverse().join('');
 }
-
-module.exports = { capitalize, reverse };
-
 ```
 
 ## Generated Documentation
 
-/*  @param String str @return String @return String
+Turn a string into a camel case.
+
+@param {string} str
+@returns {string}

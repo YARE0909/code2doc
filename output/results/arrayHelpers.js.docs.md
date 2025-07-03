@@ -12,11 +12,11 @@ function chunk(arr, size) {
   }
   return chunks;
 }
-
-module.exports = { unique, chunk };
-
 ```
 
 ## Generated Documentation
 
-/*  @param String arr  @return String
+Produces a unique array of unique values.
+
+@param {Array} arr The array to compact.
+@returns {Array} Returns a new array of unique values.

@@ -8,6 +8,7 @@ import shutil
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+import torch
 
 # ✅ Clear cache if needed
 CLEAR_CACHE = False
@@ -38,16 +39,18 @@ dataset = dataset.map(extract_code_and_doc)
 dataset = dataset.filter(lambda x: x is not None)
 dataset = dataset.remove_columns([c for c in dataset["train"].column_names if c not in ("code", "doc")])
 
-# ✅ Tokenizer + Model
-tokenizer = AutoTokenizer.from_pretrained("t5-small", use_fast=True)
-model     = T5ForConditionalGeneration.from_pretrained("t5-small")
+# ✅ Tokenizer + Model (UPGRADED to CodeT5-base)
+MODEL_NAME = "Salesforce/codet5-small"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
+model     = T5ForConditionalGeneration.from_pretrained(MODEL_NAME)
+model.config.use_cache = False
 
 # ✅ Preprocess
 def preprocess(examples):
     inputs = tokenizer(["summarize: " + c for c in examples["code"]],
-                       max_length=256, truncation=True, padding="max_length")
+                       max_length=512, truncation=True, padding="max_length")
     labels = tokenizer(examples["doc"],
-                       max_length=64, truncation=True, padding="max_length")
+                       max_length=128, truncation=True, padding="max_length")
     labels["input_ids"] = [[(tok if tok != tokenizer.pad_token_id else -100) for tok in seq] for seq in labels["input_ids"]]
     return {
         "input_ids": inputs["input_ids"],
@@ -92,16 +95,16 @@ def compute_metrics(eval_pred):
     rouge_res = rouge.compute(predictions=decoded_preds, references=decoded_labels)
     return {"bleu": bleu_res["score"], "rougeL": rouge_res["rougeL"]}
 
-# ✅ Training Args (Optimized for RTX 3050)
+# ✅ Training Args (Optimized for RTX 3050 + CodeT5)
 training_args = Seq2SeqTrainingArguments(
     output_dir="./code2doc_model",
     eval_strategy="epoch",
     save_strategy="epoch",
-    learning_rate=5e-4,
-    warmup_steps=200,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=8,
-    num_train_epochs=8,
+    learning_rate=3e-4,
+    warmup_steps=500,
+    per_device_train_batch_size=4,     # Reduce batch size for memory safety
+    per_device_eval_batch_size=2,
+    num_train_epochs=10,
     weight_decay=0.01,
     predict_with_generate=True,
     logging_dir="./logs",
@@ -125,6 +128,7 @@ trainer = Seq2SeqTrainer(
 )
 
 # ✅ Train
+torch.cuda.empty_cache()
 train_result = trainer.train(resume_from_checkpoint=resume_ckpt)
 trainer.save_model("./code2doc_model_final")
 tokenizer.save_pretrained("./code2doc_model_final")
