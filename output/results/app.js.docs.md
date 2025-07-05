@@ -18,8 +18,4 @@ function isPalindrome(str) {
 
 ## Generated Documentation
 
-Return the gcd of two numbers.
-
-@param a
-@param b
-@returns {number}
+Calculates the gcd between two numbers. @param {number} a @param {number} b @return {number}

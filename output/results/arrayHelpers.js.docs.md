@@ -16,7 +16,4 @@ function chunk(arr, size) {
 
 ## Generated Documentation
 
-Produces a unique array of unique values.
-
-@param {Array} arr The array to compact.
-@returns {Array} Returns a new array of unique values.
+Creates a unique array of arrays. @param {Array} arr @returns {Array}

@@ -15,7 +15,4 @@ function reverse(str) {
 
 ## Generated Documentation
 
-Turn a string into a camel case.
-
-@param {string} str
-@returns {string}
+Convert a string to uppercase @param {string} str @return {string}

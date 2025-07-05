@@ -13,8 +13,4 @@ function factorial(n) {
 
 ## Generated Documentation
 
-Add two numbers.
-
-@param {number} a A number to add.
-@param {number} b A number to add.
-@return {number} A number.
+Add two numbers to a number @param {number} a @param {number} b @return {number}
