@@ -12,14 +12,24 @@ import torch
 import re
 from colorama import Fore, Style
 import nltk
-import torch.backends.cuda as cuda
+import warnings
+warnings.filterwarnings("ignore")
 
 # Initialize colorama
 from colorama import init
 init()
 
-cuda.matmul.allow_tf32 = True  # Enable TF32 for matrix mult
-torch.backends.cudnn.benchmark = True  # Auto-tune CUDA kernels
+# ✅ Mac GPU Setup
+print("Setting up Mac GPU (MPS)...")
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print(f"{Fore.GREEN}✓ MPS (Mac GPU) is available and will be used{Style.RESET_ALL}")
+else:
+    device = torch.device("cpu")
+    print(f"{Fore.YELLOW}⚠ MPS not available, using CPU{Style.RESET_ALL}")
+
+# Enable optimizations for Mac
+torch.backends.mps.allow_tf32 = True if hasattr(torch.backends.mps, 'allow_tf32') else None
 
 # ✅ Clear cache if needed
 CLEAR_CACHE = False
@@ -109,120 +119,142 @@ def normalize_text(text):
     text = re.sub(r'\s+', ' ', text).strip()     # Normalize whitespace
     return text
 
-nltk.download("punkt_tab", quiet=True)
+nltk.download("punkt", quiet=True)
 
 def compute_metrics(eval_pred):
+    """Fixed compute_metrics function with proper error handling"""
     try:
         predictions, labels = eval_pred
         
+        # Handle tuple predictions (when model returns loss + predictions)
         if isinstance(predictions, tuple):
             predictions = predictions[0]
         
-        # Convert to numpy arrays and ensure valid token IDs
+        # Ensure we have proper numpy arrays
+        if torch.is_tensor(predictions):
+            predictions = predictions.cpu().numpy()
+        if torch.is_tensor(labels):
+            labels = labels.cpu().numpy()
+            
         predictions = np.array(predictions)
         labels = np.array(labels)
         
-        # Clip to valid token IDs range
-        predictions = np.clip(predictions, 0, tokenizer.vocab_size - 1)
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        labels = np.clip(labels, 0, tokenizer.vocab_size - 1)
+        print(f"\nDEBUG: Predictions shape: {predictions.shape}, Labels shape: {labels.shape}")
+        print(f"DEBUG: Predictions dtype: {predictions.dtype}, Labels dtype: {labels.dtype}")
         
-        # Decode with error handling
+        # Decode predictions
         decoded_preds = []
         for pred in predictions:
             try:
+                # Ensure prediction is valid token IDs
+                pred = np.where(pred >= 0, pred, tokenizer.pad_token_id)
+                pred = np.where(pred < tokenizer.vocab_size, pred, tokenizer.pad_token_id)
                 decoded = tokenizer.decode(pred, skip_special_tokens=True)
-                decoded_preds.append(decoded if decoded.strip() else " ")
-            except:
-                decoded_preds.append(" ")
+                decoded_preds.append(decoded.strip() if decoded.strip() else "empty")
+            except Exception as e:
+                print(f"Error decoding prediction: {e}")
+                decoded_preds.append("error")
         
+        # Decode labels
         decoded_labels = []
         for label in labels:
             try:
+                # Replace -100 with pad token
+                label = np.where(label != -100, label, tokenizer.pad_token_id)
+                label = np.where(label >= 0, label, tokenizer.pad_token_id)
+                label = np.where(label < tokenizer.vocab_size, label, tokenizer.pad_token_id)
                 decoded = tokenizer.decode(label, skip_special_tokens=True)
-                decoded_labels.append(decoded if decoded.strip() else " ")
-            except:
-                decoded_labels.append(" ")
+                decoded_labels.append(decoded.strip() if decoded.strip() else "empty")
+            except Exception as e:
+                print(f"Error decoding label: {e}")
+                decoded_labels.append("error")
         
-        # ROUGE-LSum expects newline separated sentences
-        try:
-            decoded_preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in decoded_preds]
-            decoded_labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in decoded_labels]
-        except:
-            pass
+        # Filter out empty/error predictions and labels
+        valid_pairs = [(p, l) for p, l in zip(decoded_preds, decoded_labels) 
+                      if p not in ["empty", "error"] and l not in ["empty", "error"]]
         
-        # Compute metrics
-        metrics = {
-            "rougeL": 0.0,
-            "bleu": 0.0
-        }
+        if not valid_pairs:
+            print("No valid prediction-label pairs found!")
+            return {"bleu": 0.0, "rougeL": 0.0}
         
-        try:
-            rouge_result = rouge.compute(
-                predictions=decoded_preds,
-                references=decoded_labels,
-                use_stemmer=True
-            )
-            metrics["rougeL"] = rouge_result["rougeL"] * 100
-        except Exception as e:
-            print(f"ROUGE Error: {str(e)}")
+        filtered_preds, filtered_labels = zip(*valid_pairs)
         
+        print(f"DEBUG: Valid pairs: {len(valid_pairs)}")
+        print(f"DEBUG: Sample prediction: '{filtered_preds[0]}'")
+        print(f"DEBUG: Sample label: '{filtered_labels[0]}'")
+        
+        # Initialize metrics
+        metrics = {}
+        
+        # Compute BLEU
         try:
             bleu_result = bleu.compute(
-                predictions=decoded_preds,
-                references=[[label] for label in decoded_labels],
-                smooth_method="floor",
-                smooth_value=0.1
+                predictions=list(filtered_preds),
+                references=[[label] for label in filtered_labels],
+                smooth=True
             )
-            metrics["bleu"] = bleu_result["score"]
+            metrics["bleu"] = bleu_result["bleu"] if bleu_result["bleu"] is not None else 0.0
+            print(f"DEBUG: BLEU computed: {metrics['bleu']}")
         except Exception as e:
-            print(f"BLEU Error: {str(e)}")
+            print(f"BLEU computation error: {e}")
+            metrics["bleu"] = 0.0
         
-        # Print samples for debugging
-        print("\nSample predictions vs references:")
-        for i in range(min(3, len(decoded_preds))):
-            print(f"Pred: {decoded_preds[i][:100]}...")
-            print(f"Ref: {decoded_labels[i][:100]}...\n")
+        # Compute ROUGE
+        try:
+            rouge_result = rouge.compute(
+                predictions=list(filtered_preds),
+                references=list(filtered_labels),
+                use_stemmer=True
+            )
+            metrics["rougeL"] = rouge_result["rougeL"] * 100 if rouge_result["rougeL"] is not None else 0.0
+            print(f"DEBUG: ROUGE-L computed: {metrics['rougeL']}")
+        except Exception as e:
+            print(f"ROUGE computation error: {e}")
+            metrics["rougeL"] = 0.0
+        
+        # Print sample predictions for debugging
+        print(f"\n{Fore.BLUE}Sample predictions vs references:{Style.RESET_ALL}")
+        for i in range(min(3, len(filtered_preds))):
+            print(f"{Fore.YELLOW}Pred:{Style.RESET_ALL} {filtered_preds[i]}")
+            print(f"{Fore.CYAN}Ref:{Style.RESET_ALL} {filtered_labels[i]}")
+            print("-" * 40)
         
         return metrics
     
     except Exception as e:
         print(f"Overall metric computation failed: {str(e)}")
-        return {
-            "rougeL": 0.0,
-            "bleu": 0.0
-        }
-    
-# ✅ Training Args
+        import traceback
+        traceback.print_exc()
+        return {"bleu": 0.0, "rougeL": 0.0}
+
+# ✅ Training Args (adjusted for Mac)
 training_args = Seq2SeqTrainingArguments(
     output_dir="./code2doc_model",
-    eval_strategy="steps",          # More frequent than epoch
-    eval_steps=200,                # Evaluate every 1000 steps
-    save_strategy="steps",
+    eval_strategy="epoch",            # Evaluate at end of each epoch
+    save_strategy="epoch",
     save_steps=1000,
-    learning_rate=5e-4,             # Slightly higher for Adafactor
-    warmup_steps=500,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=4,
-    gradient_accumulation_steps=2,
-    num_train_epochs=5,
+    learning_rate=3e-4,
+    warmup_steps=100,                 # Reduced warmup for single epoch
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=2,
+    gradient_accumulation_steps=4,
+    num_train_epochs=1,               # Single epoch as requested
     weight_decay=0.01,
     predict_with_generate=True,
     generation_max_length=128,
-    generation_num_beams=1,         # Faster evaluation (was 4)
+    generation_num_beams=2,
     logging_dir="./logs",
-    logging_steps=100,
+    logging_steps=50,                 # More frequent logging
     save_total_limit=2,
-    report_to="tensorboard",
-    fp16=True,
-    tf32=True,
-    optim="adafactor",
-    gradient_checkpointing=True,
-    eval_accumulation_steps=2,
+    report_to="none",
+    fp16=False,
+    dataloader_num_workers=0,
+    eval_accumulation_steps=4,
     group_by_length=True,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
-    greater_is_better=False
+    greater_is_better=False,
+    remove_unused_columns=False,
 )
 
 # ✅ Trainer
@@ -235,100 +267,100 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics,
 )
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Move model to device
 model = model.to(device)
+print(f"Model moved to device: {device}")
 
 def run_test():
+    """Test function with proper device handling"""
     try:
         input_text = "summarize: function test() { return 1; }"
-        label_text = "Test function"
+        label_text = "Test function that returns 1"
         
         print(f"\n{'='*50}\nTest Debugging\n{'='*50}")
         print(f"Input text: {input_text}")
         print(f"Label text: {label_text}")
         
-        inputs = tokenizer(input_text, return_tensors="pt").to(device)
-        labels = tokenizer(label_text, return_tensors="pt").input_ids.to(device)
+        inputs = tokenizer(input_text, return_tensors="pt")
+        labels = tokenizer(label_text, return_tensors="pt").input_ids
         
-        print("\nTokenized input IDs:", inputs["input_ids"])
+        # Move to device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        labels = labels.to(device)
+        
+        print(f"Device: {device}")
+        print("Tokenized input IDs:", inputs["input_ids"])
         print("Tokenized labels:", labels)
         
         with torch.no_grad():
             test_preds = model.generate(
                 **inputs,
                 max_new_tokens=50,
-                num_beams=4,
-                early_stopping=True
+                num_beams=2,
+                early_stopping=True,
+                do_sample=False
             )
         
-        print("\nRaw predictions tensor:", test_preds)
+        print("Raw predictions tensor:", test_preds)
         
         decoded_input = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
         decoded_pred = tokenizer.decode(test_preds[0], skip_special_tokens=True)
         decoded_label = tokenizer.decode(labels[0], skip_special_tokens=True)
         
-        print("\nDecoded input:", decoded_input)
+        print("Decoded input:", decoded_input)
         print("Decoded prediction:", decoded_pred)
         print("Decoded label:", decoded_label)
         
-        test_preds = test_preds.cpu().numpy()
-        labels = labels.cpu().numpy()
+        # Test metrics computation
+        test_preds_cpu = test_preds.cpu().numpy()
+        labels_cpu = labels.cpu().numpy()
         
-        metrics = compute_metrics((test_preds, labels))
-        print("\nTest metrics:", metrics)
+        print(f"Test predictions shape: {test_preds_cpu.shape}")
+        print(f"Test labels shape: {labels_cpu.shape}")
+        
+        metrics = compute_metrics((test_preds_cpu, labels_cpu))
+        print("Test metrics:", metrics)
         return metrics
     
     except Exception as e:
         print(f"Test failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"bleu": 0.0, "rougeL": 0.0}
 
 # Run test before training
+print(f"{Fore.GREEN}Running initial test...{Style.RESET_ALL}")
 test_metrics = run_test()
 
 # ✅ Train
-torch.cuda.empty_cache()
+print(f"{Fore.GREEN}Starting training for 1 epoch...{Style.RESET_ALL}")
+if device.type == "mps":
+    # Clear MPS cache before training
+    torch.mps.empty_cache()
+
 train_result = trainer.train(resume_from_checkpoint=resume_ckpt)
 trainer.save_model("./code2doc_model_final")
 tokenizer.save_pretrained("./code2doc_model_final")
 
-# ✅ Extract logs and write to TSV
-logs = trainer.state.log_history
-train_loss = [x["loss"] for x in logs if "loss" in x]
-eval_loss = [x["eval_loss"] for x in logs if "eval_loss" in x]
-epochs = list(range(1, len(eval_loss) + 1))
+# ✅ Display final results
+print(f"\n{Fore.GREEN}{'='*60}")
+print(f"TRAINING COMPLETE - FINAL RESULTS")
+print(f"{'='*60}{Style.RESET_ALL}")
 
-for i, epoch in enumerate(epochs):
-    metrics = [x for x in logs if x.get("epoch") == epoch and "eval_loss" in x]
-    if metrics:
-        m = metrics[0]
-        
-        # Print colored output
-        print(f"\n{Fore.GREEN}=== Epoch {epoch} Metrics ===")
-        print(f"{Fore.CYAN}Training Loss:{Style.RESET_ALL} {train_loss[i]:.4f}")
-        print(f"{Fore.CYAN}Validation Loss:{Style.RESET_ALL} {m['eval_loss']:.4f}")
-        print(f"{Fore.YELLOW}BLEU Score:{Style.RESET_ALL} {m.get('bleu', 0):.2f}")
-        print(f"{Fore.YELLOW}ROUGE-L Score:{Style.RESET_ALL} {m.get('rougeL', 0):.2f}")
-        
-        # Print sample predictions
-        if 'samples' in m:
-            print(f"\n{Fore.BLUE}Sample Predictions:{Style.RESET_ALL}")
-            for sample in m['samples']:
-                print(f" - {sample}")
-        
-        # Write to file
-        with open(log_file, "a") as f:
-            f.write(f"{epoch}\t{train_loss[i]:.4f}\t{m['eval_loss']:.4f}\t{m.get('bleu', 0):.2f}\t{m.get('rougeL', 0):.2f}\t{'; '.join(m.get('samples', []))}\n")
+# Get the final evaluation metrics
+final_eval_result = trainer.evaluate()
+print(f"{Fore.CYAN}Final Validation Loss:{Style.RESET_ALL} {final_eval_result.get('eval_loss', 'N/A'):.4f}")
+print(f"{Fore.YELLOW}Final BLEU Score:{Style.RESET_ALL} {final_eval_result.get('eval_bleu', 'N/A'):.4f}")
+print(f"{Fore.YELLOW}Final ROUGE-L Score:{Style.RESET_ALL} {final_eval_result.get('eval_rougeL', 'N/A'):.4f}")
 
-# ✅ Plot
-plt.figure(figsize=(10, 5))
-plt.plot(epochs, train_loss[:len(epochs)], label="Training Loss")
-plt.plot(epochs, eval_loss, label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training Progress")
-plt.legend()
-plt.grid(True)
-plt.savefig(plot_file)
-plt.close()
+# Write final results to log
+with open(log_file, "a") as f:
+    f.write(f"FINAL\t{train_result.training_loss:.4f}\t{final_eval_result.get('eval_loss', 0):.4f}\t{final_eval_result.get('eval_bleu', 0):.4f}\t{final_eval_result.get('eval_rougeL', 0):.4f}\t\n")
 
+# Remove the complex log processing and plotting since we only have 1 epoch
 print(f"\n{Fore.GREEN}Training complete! Results saved to {log_dir}{Style.RESET_ALL}")
+print(f"{Fore.BLUE}Final model saved to: ./code2doc_model_final{Style.RESET_ALL}")
+
+# Simple final test
+print(f"\n{Fore.GREEN}Running final test...{Style.RESET_ALL}")
+final_test_metrics = run_test()
