@@ -1,0 +1,2 @@
+Epoch	Training Loss	Validation Loss	BLEU	ROUGE-L	Samples
+1	4.7425	2.8470	0.10	23.91	

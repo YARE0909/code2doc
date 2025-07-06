@@ -1,0 +1,13 @@
+count: 20000
+code_min: 5
+code_25%: 26
+code_median: 43
+code_mean: 67.0601
+code_75%: 81
+code_max: 27848
+doc_min: 1
+doc_25%: 9
+doc_median: 18
+doc_mean: 26.88955
+doc_75%: 33
+doc_max: 1492
