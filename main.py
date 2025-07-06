@@ -56,7 +56,7 @@ for name, cfg in SOURCES:
     for split in ("train", "validation"):
         ds = raw[split]
         ds = ds.map(extract_code_and_doc, remove_columns=ds.column_names)
-        ds = ds.filter(lambda x: x is not None and len(x["code"].split()) <= 512 and len(x["doc"].split()) <= 128)
+        ds = ds.filter(lambda x: x is not None)
         all_splits.append(ds)
 
 # concatenate and resplit
@@ -75,13 +75,13 @@ model.config.use_cache = False
 # ✅ Preprocess (unchanged)
 def preprocess(examples):
     inputs = tokenizer(["summarize: " + c for c in examples["code"]],
-                      max_length=512, truncation=True, padding="max_length", pad_to_multiple_of=8)
+                      max_length=512, truncation=True, padding="max_length")
     normalized_docs = []
     for doc in examples["doc"]:
         d = re.sub(r'\s+', ' ', doc).strip()
         normalized_docs.append(d)
     labels = tokenizer(normalized_docs,
-                      max_length=128, truncation=True, padding="max_length", pad_to_multiple_of=8)
+                      max_length=128, truncation=True, padding="max_length")
     labels["input_ids"] = [[(tok if tok != tokenizer.pad_token_id else -100) for tok in seq]
                              for seq in labels["input_ids"]]
     return {"input_ids": inputs["input_ids"],
@@ -93,10 +93,7 @@ tokenized_train = train_raw.map(preprocess, batched=True, remove_columns=["code"
 tokenized_val   = val_raw.map(preprocess,   batched=True, remove_columns=["code","doc"])
 
 # ✅ Larger Subset for Better Learning
-max_train = 20000 if torch.cuda.get_device_properties(0).total_memory > 4e9 else 15000
-max_val = 3000
-
-train_data = tokenized_train.select(range(min(max_train, len(tokenized_train))))
+train_data = tokenized_train.select(range(min(15000, len(tokenized_train))))
 val_data   = tokenized_val.select(range(min(2000,  len(tokenized_val))))
 
 # ✅ Checkpoint (unchanged)
@@ -117,7 +114,7 @@ bleu_plot_file = os.path.join(log_dir, "bleuScore.png")
 with open(log_file, "w") as f:
     f.write("Epoch\tTraining Loss\tValidation Loss\tBLEU\tROUGE-L\tSamples\n")
 
-nltk.download("punkt", quiet=True)
+nltk.download("punkt_tab", quiet=True)
 
 def compute_metrics(eval_pred):
     preds, labels = eval_pred
@@ -177,16 +174,15 @@ training_args = Seq2SeqTrainingArguments(
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=5e-4,
-    warmup_steps=250,
-    per_device_train_batch_size=4,
+    warmup_steps=500,
+    per_device_train_batch_size=8,
     per_device_eval_batch_size=4,
-    gradient_accumulation_steps=4,
+    gradient_accumulation_steps=2,
     num_train_epochs=10,
     weight_decay=0.01,
     predict_with_generate=True,
     generation_max_length=128,
     generation_num_beams=1,
-    prediction_loss_only=True,
     logging_dir="./logs",
     logging_steps=100,
     save_total_limit=2,
@@ -199,7 +195,7 @@ training_args = Seq2SeqTrainingArguments(
     group_by_length=True,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
-    greater_is_better=False,
+    greater_is_better=False
 )
 
 trainer = Seq2SeqTrainer(
