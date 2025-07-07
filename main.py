@@ -1,6 +1,4 @@
-# train_combined.py
-
-# ✅ Imports
+# Imports
 from datasets import load_dataset, concatenate_datasets
 from transformers import AutoTokenizer, T5ForConditionalGeneration, Seq2SeqTrainer, Seq2SeqTrainingArguments
 import evaluate
@@ -20,10 +18,10 @@ import torch.backends.cuda as cuda
 from colorama import init
 init()
 
-cuda.matmul.allow_tf32 = True  # Enable TF32 for matrix mult
-torch.backends.cudnn.benchmark = True  # Auto-tune CUDA kernels
+cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
 
-# ✅ Clear cache if needed
+# Clear cache if needed
 CLEAR_CACHE = False
 if CLEAR_CACHE:
     cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
@@ -31,7 +29,7 @@ if CLEAR_CACHE:
         print("Clearing dataset cache...")
         shutil.rmtree(cache_dir, ignore_errors=True)
 
-# ✅ Load & combine multiple datasets
+# Load & combine multiple datasets
 SOURCES = [
     ("code_search_net", "javascript"),
     ("code_search_net", "python"),
@@ -39,7 +37,7 @@ SOURCES = [
     ("code_x_glue_ct_code_to_text", "python"),
 ]
 
-# extraction function remains the same
+# Extraction function remains the same
 def extract_code_and_doc(example):
     # support both CodeSearchNet and CodeXGLUE fields
     code = example.get("func_code_string", example.get("code", "")).strip()
@@ -59,20 +57,20 @@ for name, cfg in SOURCES:
         ds = ds.filter(lambda x: x is not None)
         all_splits.append(ds)
 
-# concatenate and resplit
+# Concatenate and resplit
 combined = concatenate_datasets(all_splits)
 combined = combined.shuffle(seed=42)
 splits = combined.train_test_split(test_size=0.1, seed=42)
 train_raw, val_raw = splits["train"], splits["test"]
 print(f"Combined train: {len(train_raw)}, validation: {len(val_raw)}")
 
-# ✅ Tokenizer + Model
+# Tokenizer + Model
 MODEL_NAME = "Salesforce/codet5-small"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_NAME)
 model.config.use_cache = False
 
-# ✅ Preprocess (unchanged)
+# Preprocess
 def preprocess(examples):
     inputs = tokenizer(["summarize: " + c for c in examples["code"]],
                       max_length=512, truncation=True, padding="max_length")
@@ -88,21 +86,21 @@ def preprocess(examples):
             "attention_mask": inputs["attention_mask"],
             "labels": labels["input_ids"]}
 
-# tokenize combined sets
+# Tokenize combined sets
 tokenized_train = train_raw.map(preprocess, batched=True, remove_columns=["code","doc"])
 tokenized_val   = val_raw.map(preprocess,   batched=True, remove_columns=["code","doc"])
 
-# ✅ Larger Subset for Better Learning
+# Larger Subset for Better Learning
 train_data = tokenized_train.select(range(min(15000, len(tokenized_train))))
 val_data   = tokenized_val.select(range(min(2000,  len(tokenized_val))))
 
-# ✅ Checkpoint (unchanged)
+# Checkpoint
 output_dir = Path("./code2doc_model")
 checkpoints = list(output_dir.glob("checkpoint-*/"))
 resume_ckpt = str(sorted(checkpoints, key=lambda x: int(x.name.split("-")[1]))[-1]) if checkpoints else None
 print("Resuming from checkpoint:" if resume_ckpt else "Starting fresh training", resume_ckpt or "")
 
-# ✅ Metrics + Logging Setup (unchanged)
+# Metrics + Logging Setup
 bleu = evaluate.load("bleu")
 rouge = evaluate.load("rouge")
 log_dir = f"./output/training/session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -139,13 +137,11 @@ def compute_metrics(eval_pred):
     decoded_preds = [re.sub(r'\s+', ' ', p).strip() for p in decoded_preds]
     decoded_labels = [re.sub(r'\s+', ' ', l).strip() for l in decoded_labels]
 
-    # Ensure NLTK punkt is available
     try:
         nltk.data.find("tokenizers/punkt")
     except LookupError:
         nltk.download("punkt", quiet=True)
 
-    # Make newline-separated for ROUGE-Lsum
     decoded_preds = ["\n".join(nltk.sent_tokenize(p)) for p in decoded_preds]
     decoded_labels = ["\n".join(nltk.sent_tokenize(l)) for l in decoded_labels]
 
@@ -168,7 +164,6 @@ def compute_metrics(eval_pred):
         "bleu": bleu_score
     }
 
-# ✅ Training Args & Trainer (unchanged)
 training_args = Seq2SeqTrainingArguments(
     output_dir="./code2doc_model",
     eval_strategy="epoch",
@@ -211,13 +206,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
 
 
-# ✅ Train (unchanged)
+# Train
 torch.cuda.empty_cache()
 trainer.train(resume_from_checkpoint=resume_ckpt)
 trainer.save_model("./code2doc_model_final")
 tokenizer.save_pretrained("./code2doc_model_final")
 
-# ✅ Extract logs and write to TSV
+# Extract logs and write to TSV
 logs = trainer.state.log_history
 train_loss = [x["loss"] for x in logs if "loss" in x]
 eval_loss = [x["eval_loss"] for x in logs if "eval_loss" in x]
@@ -230,14 +225,12 @@ for i, epoch in enumerate(epochs):
     if metrics:
         m = metrics[0]
         
-        # Print colored output
         print(f"\n{Fore.GREEN}=== Epoch {epoch} Metrics ===")
         print(f"{Fore.CYAN}Training Loss:{Style.RESET_ALL} {train_loss[i]:.4f}")
         print(f"{Fore.CYAN}Validation Loss:{Style.RESET_ALL} {m['eval_loss']:.4f}")
         print(f"{Fore.YELLOW}BLEU Score:{Style.RESET_ALL} {m.get('eval_bleu', 0):.2f}")
         print(f"{Fore.YELLOW}ROUGE-L Score:{Style.RESET_ALL} {m.get('eval_rougeL', 0):.2f}")
         
-        # Print sample predictions
         if 'samples' in m:
             print(f"\n{Fore.BLUE}Sample Predictions:{Style.RESET_ALL}")
             for sample in m['samples']:
@@ -247,7 +240,7 @@ for i, epoch in enumerate(epochs):
         with open(log_file, "a") as f:
             f.write(f"{epoch}\t{train_loss[i]:.4f}\t{m['eval_loss']:.4f}\t{m.get('eval_bleu', 0):.2f}\t{m.get('eval_rougeL', 0):.2f}\t{'; '.join(m.get('samples', []))}\n")
 
-# ✅ Plot
+# Plot
 plt.figure(figsize=(10, 5))
 plt.plot(epochs, train_loss[:len(epochs)], label="Training Loss")
 plt.plot(epochs, eval_loss, label="Validation Loss")

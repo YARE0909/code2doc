@@ -2,7 +2,7 @@ import os, glob, torch
 from datetime import datetime
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 
-# 1) Load your trained model & tokenizer
+# Load trained model & tokenizer
 MODEL_DIR = "./code2doc_model_final"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR, use_fast=True)
 model     = T5ForConditionalGeneration.from_pretrained(MODEL_DIR)

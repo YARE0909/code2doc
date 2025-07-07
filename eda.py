@@ -26,16 +26,16 @@ def pick_fields(columns):
 for ds_name, subset in DATASETS:
     print(f"\n▶ Processing {ds_name}/{subset}")
 
-    # 1) Open a streaming iterator and pull one example to detect fields
+    # Open a streaming iterator and pull one example to detect fields
     stream_peek = load_dataset(ds_name, subset, split="train", streaming=True)
     first_example = next(iter(stream_peek))
     code_field, doc_field = pick_fields(first_example.keys())
     print(f"   • Detected fields → code: '{code_field}', doc: '{doc_field}'")
 
-    # 2) Re‑open the stream for real processing
+    # Re‑open the stream for real processing
     ds_stream = load_dataset(ds_name, subset, split="train", streaming=True)
 
-    # 3) Collect token‐count statistics up to N examples
+    # Collect token‐count statistics up to N examples
     code_lens, doc_lens = [], []
     N = 20_000  # you can reduce this if you want even lighter RAM usage
     for i, ex in enumerate(ds_stream):
@@ -45,7 +45,7 @@ for ds_name, subset in DATASETS:
             break
     print(f"   • Collected {len(code_lens)} examples")
 
-    # 4) Convert to NumPy arrays and compute numeric summary
+    # Convert to NumPy arrays and compute numeric summary
     code_arr = np.array(code_lens, dtype=int)
     doc_arr  = np.array(doc_lens, dtype=int)
     summary = {
@@ -64,14 +64,14 @@ for ds_name, subset in DATASETS:
         "doc_max": int(doc_arr.max()),
     }
 
-    # 5) Write out the summary TXT
+    # Write out the summary TXT
     sum_path = os.path.join(OUTPUT_DIR, f"{ds_name}_{subset}_summary.txt")
     with open(sum_path, "w") as f:
         for k, v in summary.items():
             f.write(f"{k}: {v}\n")
     print(f"   ✔ Summary → {sum_path}")
 
-    # 6) Plot and save histograms for code & doc lengths
+    # Plot and save histograms for code & doc lengths
     for arr, label in [(code_arr, "code"), (doc_arr, "doc")]:
         plt.figure()
         plt.hist(arr, bins=50)
